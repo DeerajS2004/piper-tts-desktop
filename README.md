@@ -14,7 +14,7 @@ A modern desktop Text-to-Speech application using Piper TTS engine.
 ## 🚀 Installation
 ```bash
 # Clone this repository
-git clone https://github.com/YOUR_USERNAME/piper-tts-desktop.git
+git clone https://github.com/DeerajS2004/piper-tts-desktop.git
 cd piper-tts-desktop
 
 # Run the installer
