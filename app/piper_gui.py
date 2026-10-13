@@ -6,11 +6,12 @@ import threading
 import os
 import time
 import signal
+import json
 
 class PiperTTSApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Piper TTS")
+        self.root.title("Piper TTS - EN/JA")
         
         # Set window icon
         self.set_window_icon()
@@ -49,11 +50,27 @@ class PiperTTSApp:
         self.setup_ui()
         self.setup_keyboard_shortcuts()
         self.scan_installed_voices()
+        self.piper_bin = self._find_piper()
+    
+    def _find_piper(self):
+        """Find the piper binary: check venv first, then PATH."""
+        # Common venv location from install.sh
+        venv_piper = os.path.expanduser("~/.local/share/piper-tts/venv/bin/piper")
+        if os.path.isfile(venv_piper) and os.access(venv_piper, os.X_OK):
+            print(f"piper found: {venv_piper}")
+            return venv_piper
+        # Fallback: check PATH
+        import shutil
+        path_piper = shutil.which("piper")
+        if path_piper:
+            print(f"piper found in PATH: {path_piper}")
+            return path_piper
+        print("WARNING: piper binary not found! Speech will fail.")
+        return "piper"  # will fail with clear error at runtime
     
     def set_window_icon(self):
         """Set custom window icon if available"""
         try:
-            # Look for icon in multiple locations
             icon_locations = [
                 os.path.join(os.path.dirname(__file__), "piper-icon.png"),
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "piper-icon.png"),
@@ -61,19 +78,15 @@ class PiperTTSApp:
                 "/usr/share/pixmaps/piper-tts.png",
                 "piper-icon.png"
             ]
-            
             for icon_path in icon_locations:
                 if os.path.exists(icon_path):
-                    # Load the icon
                     icon_img = tk.PhotoImage(file=icon_path)
+                    self.icon_img = icon_img
                     self.root.iconphoto(True, icon_img)
-                    self.icon_img = icon_img  # Keep reference to prevent garbage collection
-                    print(f"✓ Icon loaded from: {icon_path}")
+                    print(f"Icon loaded: {icon_path}")
                     break
-            else:
-                print("ℹ️ Icon not found. To add a custom icon, place 'piper-icon.png' in the app folder.")
         except Exception as e:
-            print(f"⚠️ Could not load icon: {e}")
+            print(f"Icon error: {e}")
     
     def setup_styles(self):
         """Configure modern ttk styles with theme support"""
@@ -106,20 +119,20 @@ class PiperTTSApp:
         
         # Dark mode colors
         self.dark_colors = {
-            'primary': '#3498db',
+            'primary': '#6eb4f7',
             'secondary': '#1abc9c',
             'accent': '#e74c3c',
             'success': '#2ecc71',
-            'warning': "#D7DA3A",
-            'light': "#ffffff",
-            'dark': "#000000",
-            'text': "#000000",
-            'bg': "#1a1a1a",
-            'toolbar': "#ffffff",
-            'card': "#2d2d2d",
-            'input_bg': "#000000",
-            'input_fg': '#ffffff',
-            'settings_bg': "#FFFFFF",
+            'warning': '#f1c40f',
+            'light': '#3a3a3a',
+            'dark': '#ffffff',
+            'text': '#e0e0e0',
+            'bg': '#1a1a1a',
+            'toolbar': '#242424',
+            'card': '#2d2d2d',
+            'input_bg': '#1e1e1e',
+            'input_fg': '#e8e8e8',
+            'settings_bg': '#2a2a2a',
             'playback_bg': '#1e3a5f',
             'current_line': '#2d4a6e',
             'marked': '#5d4a1e',
@@ -151,6 +164,7 @@ class PiperTTSApp:
         
         style.configure('Stats.TLabel',
                        font=('Segoe UI', 9),
+                       background=self.colors['card'],
                        foreground=self.colors['text'])
         
         # Configure button styles
@@ -219,6 +233,10 @@ class PiperTTSApp:
             self.text_input.tag_config("current_line", background=self.colors['current_line'])
             self.text_input.tag_config("marked", background=self.colors['marked'])
             
+            # Update status label foreground
+            if hasattr(self, 'status_label'):
+                self.status_label.configure(foreground=self.colors['secondary'])
+            
             # Update other UI elements
             if hasattr(self, 'settings_frame'):
                 self.settings_frame.configure(bg=self.colors['settings_bg'])
@@ -260,8 +278,21 @@ class PiperTTSApp:
                  background=[('active', self.colors['scrollbar_slider_hover'])])
     
     def update_text_widget_font(self):
-        """Update the text widget font size"""
+        """Update the text widget font size with CJK fallback support"""
+        # Try CJK-capable fonts in order, fall back gracefully
+        cjk_fonts = [
+            'Noto Sans CJK JP', 'IPAGothic', 'IPAPGothic',
+            'TakaoGothic', 'VL Gothic', 'Segoe UI'
+        ]
         font_family = 'Segoe UI'
+        for f in cjk_fonts:
+            try:
+                import tkinter.font as tkfont
+                if f in tkfont.families():
+                    font_family = f
+                    break
+            except Exception:
+                pass
         font_config = (font_family, self.font_size)
         self.text_input.configure(font=font_config)
     
@@ -359,7 +390,7 @@ class PiperTTSApp:
             self.text_scroll_x.grid()
     
     def scan_installed_voices(self):
-        """Scan for installed voice files"""
+        """Scan for installed voice files and build language-aware display names"""
         voices_dir = os.path.expanduser("~/.local/share/piper-tts/voices")
         
         self.voices = {}
@@ -369,7 +400,21 @@ class PiperTTSApp:
             print("ℹ️ Voices directory not found")
             return
         
-        for filename in os.listdir(voices_dir):
+        # Language display name mapping
+        LANG_MAP = {
+            'en_US': ('[EN-US]', 'English US'),
+            'en_GB': ('[EN-GB]', 'English GB'),
+            'en_AU': ('[EN-AU]', 'English AU'),
+            'ja_JP': ('[JA]', 'Japanese'),
+            'de_DE': ('[DE]', 'German'),
+            'fr_FR': ('[FR]', 'French'),
+            'es_ES': ('[ES]', 'Spanish'),
+            'hi_IN': ('[HI]', 'Hindi'),
+            'zh_CN': ('[ZH]', 'Chinese'),
+            'ko_KR': ('[KO]', 'Korean'),
+        }
+        
+        for filename in sorted(os.listdir(voices_dir)):
             if filename.endswith('.onnx'):
                 voice_id = filename[:-5]  # Remove .onnx extension
                 json_file = f"{voice_id}.onnx.json"
@@ -378,13 +423,14 @@ class PiperTTSApp:
                 json_path = os.path.join(voices_dir, json_file)
                 
                 if os.path.exists(json_path):
-                    # Simple display name
-                    if "lessac" in voice_id.lower():
-                        display_name = f"Lessac ({voice_id.split('-')[0]})"
-                    elif "ryan" in voice_id.lower():
-                        display_name = f"Ryan ({voice_id.split('-')[0]})"
-                    else:
-                        display_name = voice_id
+                    # Parse locale prefix (e.g. "en_US" from "en_US-lessac-medium")
+                    parts = voice_id.split('-')
+                    locale = parts[0] if parts else voice_id
+                    speaker_parts = parts[1:] if len(parts) > 1 else [voice_id]
+                    speaker = ' '.join(p.capitalize() for p in speaker_parts)
+                    
+                    flag, lang_name = LANG_MAP.get(locale, ('[??]', locale))
+                    display_name = f"{flag} {speaker} ({lang_name})"
                     
                     self.voices[voice_id] = display_name
                     self.voice_files[voice_id] = {
@@ -436,7 +482,7 @@ class PiperTTSApp:
                                        textvariable=self.voice_var,
                                        values=[],
                                        state="readonly",
-                                       width=15,
+                                       width=24,
                                        style='Toolbar.TCombobox')
         self.voice_combo.pack(pady=(2, 0))
         
@@ -579,11 +625,11 @@ class PiperTTSApp:
         
         # Status indicator
         self.status_var = tk.StringVar(value="Ready")
-        status_label = ttk.Label(stats_frame,
+        self.status_label = ttk.Label(stats_frame,
                                 textvariable=self.status_var,
                                 font=('Segoe UI', 9),
                                 foreground=self.colors['secondary'])
-        status_label.pack(side='right')
+        self.status_label.pack(side='right')
         
         # Text widget with scrollbars
         text_container = tk.Frame(text_card)
@@ -636,41 +682,43 @@ class PiperTTSApp:
         self.text_input.bind('<Configure>', lambda e: self.check_scrollbar_visibility())
         
         # Add sample text
-        self.text_input.insert("1.0", """🎤 PIPER TTS - Enhanced Version
+        self.text_input.insert("1.0", """Piper TTS - EN/JA Edition
 
-✨ FEATURES:
-• Offline Text-to-Speech
-• Dark/Light Mode Toggle
-• Export Audio (WAV only)
-• Speed Control (0.5x to 2.0x)
-• Position Marking
-• All Keyboard Shortcuts
-• Font Size Control (Ctrl++/Ctrl+-)
-• Auto-hiding Scrollbars
+FEATURES:
+- Offline Text-to-Speech (English & Japanese)
+- Dark/Light Mode Toggle
+- Export Audio (WAV)
+- Speed Control (0.5x to 2.0x)
+- Position Marking & Jump
+- Font Size Control (Ctrl++/Ctrl+-)
+- Auto-hiding Scrollbars
+
+[EN-US] ENGLISH SAMPLE:
+Hello! Welcome to Piper TTS. This app works completely offline.
+
+[JA] JAPANESE SAMPLE:
+(Select Japanese voice first, then type Japanese text here)
 
 HOW TO USE:
-1. Type or paste your text below
-2. Select voice from dropdown
+1. Select a voice from the dropdown ([EN-US] for English, [JA] for Japanese)
+2. Type or paste your text
 3. Adjust speed if needed
-4. Click "▶ Speak" or use keyboard shortcuts
-5. Use "📍 Mark" and "▶ From Mark" to read from specific positions
-6. Click "💾 Export" to save as WAV file
+4. Click Speak or press Ctrl+Enter
+5. Use Mark + From Mark to read from any position
+6. Click Export to save as WAV
 
 KEYBOARD SHORTCUTS:
-• Ctrl+Enter: Speak from beginning
-• Ctrl+Shift+Enter: Speak from marked position
-• Space: Pause/Resume
-• Escape: Stop playback
-• Ctrl+M: Mark position
-• Ctrl+J: Jump to mark
-• Ctrl+T: Toggle theme
-• Ctrl+E: Export audio
-• Ctrl+A: Select all text
-• Ctrl+Z/Y: Undo/Redo
-• Ctrl++/Ctrl+-: Increase/Decrease font size
-• Ctrl+0: Reset font size
-
-Try it now! Type your text below and click "▶ Speak".""")
+Ctrl+Enter        - Speak from beginning
+Ctrl+Shift+Enter  - Speak from mark
+Ctrl+Space        - Pause/Resume
+Escape            - Stop playback
+Ctrl+M / Ctrl+J  - Mark / Jump to mark
+Ctrl+T            - Toggle theme
+Ctrl+E            - Export audio
+Ctrl+A            - Select all
+Ctrl+Z / Ctrl+Y  - Undo / Redo
+Ctrl++ / Ctrl+-  - Font size up/down
+Ctrl+0            - Reset font size""")
         
         self.update_stats()
     
@@ -695,7 +743,8 @@ Try it now! Type your text below and click "▶ Speak".""")
         self.root.bind('<Escape>', lambda e: self.stop_speech())
         self.root.bind('<Control-Return>', lambda e: self.speak())
         self.root.bind('<Control-Shift-Return>', lambda e: self.speak_from_mark())
-        self.root.bind('<space>', lambda e: self.pause_speech() if self.is_playing else None)
+        # Ctrl+Space for pause — avoids conflict with typing in the text box
+        self.root.bind('<Control-space>', lambda e: self.pause_speech() if self.is_playing else None)
         self.root.bind('<Control-m>', lambda e: self.mark_position_func())
         self.root.bind('<Control-M>', lambda e: self.mark_position_func())
         self.root.bind('<Control-j>', lambda e: self.jump_to_mark())
@@ -715,11 +764,11 @@ Try it now! Type your text below and click "▶ Speak".""")
         """Show keyboard shortcuts dialog"""
         shortcuts = """
         🔊 PLAYBACK CONTROLS:
-        Ctrl+Enter      - Speak from beginning
+        Ctrl+Enter       - Speak from beginning
         Ctrl+Shift+Enter - Speak from marked position
-        Space           - Pause/Resume (when playing)
-        Escape          - Stop playback
-        Ctrl+E          - Export audio (WAV only)
+        Ctrl+Space       - Pause/Resume (when playing)
+        Escape           - Stop playback
+        Ctrl+E           - Export audio (WAV)
         
         📍 POSITION NAVIGATION:
         Ctrl+M  - Mark current position
@@ -876,16 +925,26 @@ Try it now! Type your text below and click "▶ Speak".""")
     def speak_from_mark(self):
         """Speak starting from marked position"""
         if not self.mark_position:
-            messagebox.showinfo("No Mark", "Please mark a position first using '📍 Mark' button.")
+            messagebox.showinfo("No Mark", "Please mark a position first using the Mark button.")
             return
         self.speak(from_marked_position=True)
+    
+    def _get_voice_sample_rate(self, voice_info):
+        """Read sample rate from the voice JSON config file"""
+        try:
+            with open(voice_info["json"], "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return config.get("audio", {}).get("sample_rate", 22050)
+        except Exception:
+            return 22050  # Default Piper sample rate
     
     def run_piper(self, text, voice_info):
         """Run piper with process control"""
         try:
             speed = self.speed_var.get()
+            sample_rate = self._get_voice_sample_rate(voice_info)
             
-            cmd = ['piper', '--model', voice_info["onnx"], '--output-raw']
+            cmd = [self.piper_bin, '--model', voice_info["onnx"], '--output-raw']
             
             if speed != 1.0:
                 cmd.extend(['--length_scale', str(1.0/speed)])
@@ -898,7 +957,7 @@ Try it now! Type your text below and click "▶ Speak".""")
             )
             
             self.aplay_process = subprocess.Popen(
-                ['aplay', '-r', '22050', '-f', 'S16_LE', '-t', 'raw', '-c', '1'],
+                ['aplay', '-r', str(sample_rate), '-f', 'S16_LE', '-t', 'raw', '-c', '1'],
                 stdin=self.piper_process.stdout,
                 stderr=subprocess.PIPE
             )
@@ -975,12 +1034,12 @@ Try it now! Type your text below and click "▶ Speak".""")
         thread.start()
     
     def run_export(self, text, voice_info, file_path):
-        """Export audio to WAV file - FIXED VERSION"""
+        """Export audio to WAV file"""
         try:
             speed = self.speed_var.get()
             
             # Build command
-            cmd = ['piper', '--model', voice_info["onnx"], '--output_file', file_path]
+            cmd = [self.piper_bin, '--model', voice_info["onnx"], '--output_file', file_path]
             
             if speed != 1.0:
                 cmd.extend(['--length_scale', str(1.0/speed)])

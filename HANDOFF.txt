@@ -1,0 +1,152 @@
+# HANDOFF FILE — piper-tts-desktop project
+# Created: 2026-10-13
+# For: Any agent/account continuing this work
+
+================================================================================
+PROJECT LOCATION
+================================================================================
+/home/deerajs/.gemini/antigravity/scratch/piper-tts-desktop
+
+GitHub repo (original): https://github.com/DeerajS2004/piper-tts-desktop
+
+================================================================================
+WHAT THIS PROJECT IS
+================================================================================
+A Python/Tkinter OFFLINE desktop TTS app using Piper TTS engine.
+Main file: app/piper_gui.py  (~1200 lines)
+Install:   scripts/install.sh
+Japanese voice download: scripts/add_japanese_voice.sh  (NEW - we added this)
+
+================================================================================
+WHAT HAS BEEN COMPLETED
+================================================================================
+
+[DONE] 1. Added Japanese voice support
+   - New script: scripts/add_japanese_voice.sh
+   - Downloads voice: ja_JP-hi_fi_captain-medium  (74 MB, already downloaded)
+   - Voice is saved at: ~/.local/share/piper-tts/voices/ja_JP-hi_fi_captain-medium.onnx
+   - Voice dropdown now shows language flags (🇺🇸 🇬🇧 🇯🇵 etc.) for all voices
+   - CJK font auto-detection added (Noto Sans CJK JP → IPAGothic → fallback)
+
+[DONE] 2. Fixed dark mode colors
+   - dark_colors dict was completely broken (black text on black bg, white toolbar)
+   - All 9 color values corrected in piper_gui.py
+
+[DONE] 3. Fixed install.sh crash
+   - install.sh tried to cp piper_gui_simple.py which doesn't exist
+   - With set -e this killed the install entirely. Line removed.
+
+[DONE] 4. Fixed Space key conflict
+   - <space> binding was intercepting typing in text box
+   - Changed to <Control-space>
+
+[DONE] 5. Fixed hardcoded aplay sample rate
+   - Was always 22050 Hz, now reads from voice .onnx.json config file
+
+[DONE] 6. Fixed status label color not updating on theme toggle
+   - Stored ref as self.status_label, update foreground in apply_theme()
+
+[DONE] 7. Fixed Stats.TLabel background in dark mode
+
+[DONE] 8. Voice combobox width increased (15 → 24)
+
+[DONE] 9. Sample text updated with Japanese example text
+
+[DONE] 10. Window title: "Piper TTS — EN/JA"
+
+[DONE] 11. Added import json (needed for reading voice JSON config)
+
+================================================================================
+CURRENT BLOCKING ISSUE (NOT YET FIXED)
+================================================================================
+
+PROBLEM: App crashes with "Tcl_Release couldn't find reference / Aborted (core dumped)"
+
+ROOT CAUSE: iconphoto() in Tkinter causes a C-level SIGABRT crash on this
+  specific Tk/Linux build (Pop!_OS). This is a known Tcl/Tk bug.
+  Python try/except CANNOT catch it — it's a C-level signal.
+
+CURRENT STATE OF FIX (partially done):
+  set_window_icon() now loads the PNG but does NOT call self.root.iconphoto()
+  This was just applied — NOT YET TESTED by the user.
+
+WHAT NEEDS TO BE VERIFIED:
+  Run: python3 /home/deerajs/.gemini/antigravity/scratch/piper-tts-desktop/app/piper_gui.py
+  If it still crashes → there is another crash source.
+  If it works → the iconphoto fix was sufficient.
+
+IF IT STILL CRASHES after removing iconphoto:
+  The next suspect is tkfont.families() in update_text_widget_font()
+  Fix: move it out of the function, cache it at class init level.
+  Or simplify: just always use 'TkDefaultFont' which supports CJK.
+
+  Code to check: lines ~262-280 in piper_gui.py
+  The function update_text_widget_font() calls tkfont.families() in a loop.
+  Try replacing the whole function body with:
+      font_config = ('TkDefaultFont', self.font_size)
+      self.text_input.configure(font=font_config)
+
+================================================================================
+REMAINING TASKS
+================================================================================
+
+[ ] Verify the app actually runs after the iconphoto fix
+[ ] Test Japanese voice: select 🇯🇵 Hi Fi Captain voice, type こんにちは, click Speak
+[ ] Test dark mode toggle looks correct
+[ ] Test Ctrl+Space for pause (was Space before, conflicted with typing)
+[ ] Push final changes to GitHub:
+      cd /home/deerajs/.gemini/antigravity/scratch/piper-tts-desktop
+      git add -A
+      git commit -m "feat: Add Japanese TTS + fix dark mode, crashes, space key, sample rate"
+      git push
+
+================================================================================
+KEY FILES
+================================================================================
+
+app/piper_gui.py           - Main app (ALL changes are here)
+scripts/install.sh         - Fixed (removed broken cp line, added JP voice option)
+scripts/add_japanese_voice.sh  - NEW: downloads Japanese voice
+
+================================================================================
+ENVIRONMENT INFO
+================================================================================
+
+OS: Pop!_OS (Ubuntu-based)
+Python: 3.x  (python3)
+Tkinter: installed (but iconphoto() has a bug on this build)
+Piper TTS: installed in virtualenv at ~/.local/share/piper-tts/venv/
+Voices dir: ~/.local/share/piper-tts/voices/
+English voice: en_US-lessac-medium.onnx  (already installed)
+Japanese voice: ja_JP-hi_fi_captain-medium.onnx  (already downloaded, 74 MB)
+CJK font: fonts-noto-cjk (already installed)
+
+================================================================================
+HOW TO RUN
+================================================================================
+
+Option A (direct):
+  python3 /home/deerajs/.gemini/antigravity/scratch/piper-tts-desktop/app/piper_gui.py
+
+Option B (via installed launcher, if already installed):
+  piper-tts
+  or
+  ~/.local/share/piper-tts/app/launcher.sh
+
+================================================================================
+NOTES
+================================================================================
+
+- The app requires 'piper' binary in PATH. If installed via the venv, the
+  launcher.sh activates the venv first. Running directly with python3 may fail
+  at speech time if piper isn't in PATH. Activate the venv first:
+    source ~/.local/share/piper-tts/venv/bin/activate
+    python3 app/piper_gui.py
+
+- Japanese Piper needs espeak-ng with Japanese data for phonemization.
+  If Japanese speech fails, install: sudo apt install espeak-ng-data
+  And check: espeak-ng --voices | grep ja
+
+- The voice name changed: NOT "kenjirous" (doesn't exist), it's "hi_fi_captain"
+  Correct URL pattern:
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx

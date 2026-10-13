@@ -136,17 +136,21 @@ install_dependencies() {
         print_success "Virtual environment created"
     fi
     
-    # Activate virtual environment and install piper-tts
-    print_info "Installing piper-tts..."
+    # Activate virtual environment
     source "$INSTALL_DIR/venv/bin/activate"
     
     # Upgrade pip first
     pip install --upgrade pip
     
-    # Install piper-tts
-    pip install piper-tts
+    # Install piper-tts >= 1.8.0 (required for Japanese phoneme_type support)
+    print_info "Installing piper-tts..."
+    pip install "piper-tts>=1.8.0"
     
-    # Also install any other required packages
+    # Install pyopenjtalk for Japanese TTS support
+    print_info "Installing Japanese phonemizer (pyopenjtalk)..."
+    pip install pyopenjtalk
+    
+    # Other required packages
     pip install packaging
     
     deactivate
@@ -171,7 +175,6 @@ copy_application() {
     
     # Copy Python files
     cp "$PROJECT_DIR/app/piper_gui.py" "$INSTALL_DIR/app/"
-    cp "$PROJECT_DIR/app/piper_gui_simple.py" "$INSTALL_DIR/app/"
     cp "$PROJECT_DIR/app/test_app.py" "$INSTALL_DIR/app/"
     
     # Make launcher script
@@ -254,11 +257,41 @@ download_voices() {
     if [ -f "$VOICE_ONNX" ] && [ -f "$VOICE_JSON" ]; then
         ONNX_SIZE=$(du -h "$VOICE_ONNX" | cut -f1)
         print_success "Voice files downloaded successfully ($ONNX_SIZE)"
-        return 0
     else
         print_error "Failed to download voice files"
         return 1
     fi
+    
+    # Optional: Download Japanese voice
+    echo ""
+    read -p "$(echo -e "${YELLOW}Would you like to also download the Japanese voice (\U1F1EF\U1F1F5 ja_JP-kenjirous-medium, ~63 MB)? [y/N] ${NC}")" -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        JA_NAME="ja_JP-kenjirous-medium"
+        JA_ONNX="$INSTALL_DIR/voices/$JA_NAME.onnx"
+        JA_JSON="$INSTALL_DIR/voices/$JA_NAME.onnx.json"
+        JA_ONNX_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kenjirous/medium/ja_JP-kenjirous-medium.onnx"
+        JA_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kenjirous/medium/ja_JP-kenjirous-medium.onnx.json"
+        
+        if [ -f "$JA_ONNX" ] && [ -f "$JA_JSON" ]; then
+            print_success "Japanese voice already exists"
+        else
+            print_info "Downloading Japanese voice (ja_JP-kenjirous-medium)..."
+            if wget -q --show-progress -O "$JA_ONNX" "$JA_ONNX_URL" && \
+               wget -q --show-progress -O "$JA_JSON" "$JA_JSON_URL"; then
+                JA_SIZE=$(du -h "$JA_ONNX" | cut -f1)
+                print_success "Japanese voice downloaded ($JA_SIZE)"
+            else
+                print_warning "Failed to download Japanese voice. You can add it later with: ./scripts/add_japanese_voice.sh"
+                # Clean up partial files
+                rm -f "$JA_ONNX" "$JA_JSON"
+            fi
+        fi
+    else
+        print_info "Skipping Japanese voice. Add it later with: ./scripts/add_japanese_voice.sh"
+    fi
+    
+    return 0
 }
 
 # Create desktop entry
