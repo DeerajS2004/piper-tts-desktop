@@ -1,6 +1,6 @@
 name: Build and Release
 
-# Triggered by pushing a version tag: git tag v1.0.0 && git push --tags
+# Trigger: push a version tag  →  git tag v1.1.0 && git push --tags
 on:
   push:
     tags:
@@ -13,10 +13,10 @@ on:
         default: 'v1.0.0'
 
 permissions:
-  contents: write   # needed to create releases and upload assets
+  contents: write
 
 # ---------------------------------------------------------------------------
-# Voice model URLs  (verified working — HuggingFace main branch)
+# Voice URLs (verified — HuggingFace main branch)
 # ---------------------------------------------------------------------------
 env:
   EN_VOICE:    en_US-lessac-medium
@@ -31,35 +31,35 @@ jobs:
 # ===========================================================================
 
   # -------------------------------------------------------------------------
-  # Step 1 — create the GitHub Release (both build jobs upload into it)
+  # Create the GitHub Release first so both build jobs can upload into it
   # -------------------------------------------------------------------------
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.get_tag.outputs.tag }}
-      version: ${{ steps.get_tag.outputs.version }}
+      tag:     ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
 
     steps:
       - name: Resolve tag
-        id: get_tag
+        id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}"         >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}"   >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_tag.outputs.tag }}
-          name: "Piper TTS ${{ steps.get_tag.outputs.tag }}"
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Piper TTS ${{ steps.tag.outputs.tag }}"
           draft: false
           prerelease: false
           body: |
-            ## Piper TTS ${{ steps.get_tag.outputs.tag }} — EN/JA Edition
+            ## Piper TTS ${{ steps.tag.outputs.tag }} — EN/JA Edition
 
             Offline Text-to-Speech for **English** and **Japanese** — no internet required after install.
 
@@ -67,46 +67,31 @@ jobs:
 
             | Platform | File | Notes |
             |----------|------|-------|
-            | Linux (Debian/Ubuntu) | `piper-tts_*_amd64.deb` | Tested on Ubuntu 22.04+ |
-            | Windows 10/11 (64-bit) | `piper-tts-windows-*.zip` | Extract and run `piper-tts.exe` |
+            | Linux (Debian/Ubuntu) | `piper-tts_*_amd64.deb` | `sudo dpkg -i *.deb && sudo apt-get install -f` |
+            | Linux (any distro) | `piper-tts-*-x86_64.AppImage` | `chmod +x *.AppImage && ./piper-tts-*.AppImage` |
+            | Windows 10/11 64-bit | `piper-tts.exe` | Double-click to run |
 
-            ### Bundled Voices
-            Both voice models are included — works fully offline:
-            - **English**: `en_US-lessac-medium` (~63 MB, ~191 WPM at 1x)
-            - **Japanese**: `ja_JP-hi_fi_captain-medium` (~74 MB)
+            ### Bundled Voices — works fully offline
+            - **English**: `en_US-lessac-medium` (~191 WPM at 1x speed)
+            - **Japanese**: `ja_JP-hi_fi_captain-medium`
 
-            ### Linux Install
-            ```bash
-            sudo dpkg -i piper-tts_*_amd64.deb
-            sudo apt-get install -f          # resolve any missing system deps
-            # Then launch from app menu or run: piper-tts
-            ```
-            > Note: first launch installs Python packages (~1 min, needs internet once).
-
-            ### Windows Install
-            1. Extract the `.zip`
-            2. Double-click `piper-tts.exe`
-
-            ### Speech Rates (English)
-            | Speed | WPM |
-            |-------|-----|
-            | 1x    | ~191 |
-            | 1.5x  | ~258 |
+            > **Windows note**: first launch extracts ~300 MB to a temp folder — this is normal for PyInstaller apps and only happens once per version.
 
   # -------------------------------------------------------------------------
-  # Step 2a — Build Linux .deb
+  # Linux: build .deb  AND  .AppImage  (shares the voice downloads)
   # -------------------------------------------------------------------------
-  build-linux-deb:
+  build-linux:
     needs: create-release
     runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system build dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget dpkg-dev
+          sudo apt-get install -y wget dpkg-dev python3-pip python3-venv \
+            python3-tk espeak-ng alsa-utils imagemagick file
 
       - name: Download voice models
         run: |
@@ -119,12 +104,12 @@ jobs:
           wget -q                  -O voices/${{ env.JA_VOICE }}.onnx.json "${{ env.JA_JSON_URL }}"
           ls -lh voices/
 
+      # ------- .deb --------------------------------------------------------
       - name: Build .deb package
         run: |
           VERSION="${{ needs.create-release.outputs.version }}"
           PKG="piper-tts_${VERSION}_amd64"
 
-          # ---- directory layout ----
           mkdir -p ${PKG}/DEBIAN
           mkdir -p ${PKG}/usr/bin
           mkdir -p ${PKG}/usr/share/piper-tts/app
@@ -133,26 +118,19 @@ jobs:
           mkdir -p ${PKG}/usr/share/pixmaps
           mkdir -p ${PKG}/usr/share/doc/piper-tts
 
-          # ---- app files ----
-          cp app/piper_gui.py                ${PKG}/usr/share/piper-tts/app/
-          cp app/piper-icon.png              ${PKG}/usr/share/piper-tts/app/ 2>/dev/null || true
-          cp app/piper-icon.png              ${PKG}/usr/share/pixmaps/piper-tts.png 2>/dev/null || true
-
-          # ---- bundled voices (fully offline after install) ----
+          cp app/piper_gui.py              ${PKG}/usr/share/piper-tts/app/
+          cp app/piper-icon.png            ${PKG}/usr/share/piper-tts/app/   2>/dev/null || true
+          cp app/piper-icon.png            ${PKG}/usr/share/pixmaps/piper-tts.png 2>/dev/null || true
           cp voices/*.onnx voices/*.onnx.json  ${PKG}/usr/share/piper-tts/voices/
-
-          # ---- copyright ----
-          echo "Piper TTS Desktop — MIT License. See https://github.com/DeerajS2004/piper-tts-desktop" \
+          echo "Piper TTS Desktop - MIT License - https://github.com/DeerajS2004/piper-tts-desktop" \
             > ${PKG}/usr/share/doc/piper-tts/copyright
 
-          # ---- /usr/bin/piper-tts launcher ----
           cat > ${PKG}/usr/bin/piper-tts <<'LAUNCHER'
           #!/bin/bash
           exec /usr/share/piper-tts/venv/bin/python3 /usr/share/piper-tts/app/piper_gui.py "$@"
           LAUNCHER
           chmod 755 ${PKG}/usr/bin/piper-tts
 
-          # ---- .desktop entry ----
           cat > ${PKG}/usr/share/applications/piper-tts.desktop <<'DESKTOP'
           [Desktop Entry]
           Type=Application
@@ -163,11 +141,10 @@ jobs:
           Icon=/usr/share/pixmaps/piper-tts.png
           Terminal=false
           Categories=AudioVideo;Audio;Utility;Accessibility;
-          Keywords=TTS;speech;text-to-speech;japanese;english;offline;
+          Keywords=TTS;speech;japanese;english;offline;
           StartupNotify=true
           DESKTOP
 
-          # ---- DEBIAN/control ----
           cat > ${PKG}/DEBIAN/control <<CONTROL
           Package: piper-tts
           Version: ${VERSION}
@@ -180,59 +157,136 @@ jobs:
           Priority: optional
           Homepage: https://github.com/DeerajS2004/piper-tts-desktop
           Description: Offline Text-to-Speech for English and Japanese
-           Piper TTS Desktop is a lightweight offline TTS application powered by
-           the Piper engine.  Supports English (en_US-lessac-medium) and Japanese
-           (ja_JP-hi_fi_captain-medium) voice models.
-           .
-           Both voice models are bundled -- the app works fully offline
-           after the one-time post-install Python package setup.
+           Piper TTS Desktop is a lightweight offline TTS app powered by Piper.
+           Supports English (en_US-lessac-medium) and Japanese
+           (ja_JP-hi_fi_captain-medium). Both voices are bundled.
           CONTROL
 
-          # ---- DEBIAN/postinst — create venv + install pip packages ----
           cat > ${PKG}/DEBIAN/postinst <<'POSTINST'
           #!/bin/bash
           set -e
           case "$1" in
             configure)
               VENV="/usr/share/piper-tts/venv"
-              echo "Setting up Piper TTS Python environment (requires internet)..."
-              if [ ! -d "$VENV" ]; then
-                python3 -m venv "$VENV"
-              fi
-              "$VENV/bin/pip" install --upgrade pip --quiet
-              "$VENV/bin/pip" install "piper-tts>=1.8.0" pyopenjtalk packaging --quiet
+              echo "Setting up Python environment (requires internet, ~1 min)..."
+              [ -d "$VENV" ] || python3 -m venv "$VENV"
+              "$VENV/bin/pip" install --upgrade pip -q
+              "$VENV/bin/pip" install "piper-tts>=1.8.0" pyopenjtalk packaging -q
               echo "Piper TTS is ready!"
               ;;
           esac
           POSTINST
           chmod 755 ${PKG}/DEBIAN/postinst
 
-          # ---- DEBIAN/prerm — remove venv on uninstall ----
           cat > ${PKG}/DEBIAN/prerm <<'PRERM'
           #!/bin/bash
           set -e
           case "$1" in
-            remove|purge)
-              rm -rf /usr/share/piper-tts/venv
-              ;;
+            remove|purge) rm -rf /usr/share/piper-tts/venv ;;
           esac
           PRERM
           chmod 755 ${PKG}/DEBIAN/prerm
 
-          # ---- build ----
           dpkg-deb --build --root-owner-group ${PKG}
           ls -lh ${PKG}.deb
 
-      - name: Upload .deb to release
+      # ------- .AppImage ---------------------------------------------------
+      - name: Install Python packages for AppImage
+        run: |
+          pip3 install "piper-tts>=1.8.0" pyopenjtalk sounddevice soundfile packaging pyinstaller
+
+      - name: Build PyInstaller bundle for AppImage
+        run: |
+          pyinstaller \
+            --name piper-tts \
+            --onedir \
+            --collect-all pyopenjtalk \
+            --collect-all piper \
+            --collect-all sounddevice \
+            --collect-all soundfile \
+            --collect-all onnxruntime \
+            --hidden-import tkinter \
+            --hidden-import tkinter.ttk \
+            --hidden-import tkinter.messagebox \
+            --hidden-import tkinter.filedialog \
+            --hidden-import tkinter.scrolledtext \
+            app/piper_gui.py
+
+      - name: Assemble AppImage
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+
+          # ---- AppDir structure ----
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/voices
+
+          # Copy PyInstaller output
+          cp -r dist/piper-tts/*  AppDir/usr/bin/
+
+          # Copy voices (next to app, picked up via APPDIR env var in AppRun)
+          cp voices/*.onnx voices/*.onnx.json  AppDir/voices/
+
+          # Icon (convert PNG to required format, fallback if no icon)
+          if [ -f app/piper-icon.png ]; then
+            cp app/piper-icon.png AppDir/piper-tts.png
+            cp app/piper-icon.png AppDir/usr/share/icons/hicolor/256x256/apps/piper-tts.png
+          else
+            # Generate a minimal placeholder icon
+            convert -size 256x256 xc:"#1a1a2e" -fill white \
+              -pointsize 48 -gravity center -annotate 0 "TTS" AppDir/piper-tts.png 2>/dev/null || \
+              printf '\x89PNG\r\n' > AppDir/piper-tts.png
+          fi
+
+          # Desktop entry (must be in AppDir root for appimagetool)
+          cat > AppDir/piper-tts.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Piper TTS
+          GenericName=Text-to-Speech
+          Comment=Offline Text-to-Speech for English and Japanese
+          Exec=piper-tts
+          Icon=piper-tts
+          Terminal=false
+          Categories=AudioVideo;Audio;Utility;Accessibility;
+          Keywords=TTS;speech;japanese;english;offline;
+          DESKTOP
+          cp AppDir/piper-tts.desktop AppDir/usr/share/applications/
+
+          # AppRun launcher — sets APPDIR and voices path
+          cat > AppDir/AppRun <<'APPRUN'
+          #!/bin/bash
+          APPDIR="$(dirname "$(readlink -f "$0")")"
+          export PIPER_VOICES_DIR="$APPDIR/voices"
+          export LD_LIBRARY_PATH="$APPDIR/usr/bin:${LD_LIBRARY_PATH}"
+          exec "$APPDIR/usr/bin/piper-tts" "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+
+          # Download appimagetool
+          wget -q -O appimagetool.AppImage \
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool.AppImage
+
+          # Build AppImage (APPIMAGE_EXTRACT_AND_RUN avoids FUSE requirement in CI)
+          APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool.AppImage AppDir/ \
+            "piper-tts-${VERSION}-x86_64.AppImage"
+
+          ls -lh piper-tts-*.AppImage
+
+      - name: Upload Linux assets to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: "*.deb"
+          files: |
+            *.deb
+            piper-tts-*.AppImage
 
   # -------------------------------------------------------------------------
-  # Step 2b — Build Windows .zip (PyInstaller bundle)
+  # Windows: single self-contained .exe  (voices bundled inside)
   # -------------------------------------------------------------------------
-  build-windows:
+  build-windows-exe:
     needs: create-release
     runs-on: windows-latest
 
@@ -260,15 +314,17 @@ jobs:
           echo "Downloading Japanese voice..."
           curl -L --retry 3 -o voices/${{ env.JA_VOICE }}.onnx      "${{ env.JA_ONNX_URL }}"
           curl -L --retry 3 -o voices/${{ env.JA_VOICE }}.onnx.json "${{ env.JA_JSON_URL }}"
+          ls -lh voices/
 
-      - name: Build with PyInstaller
+      - name: Build single .exe with PyInstaller
         shell: bash
         run: |
-          # Collect all native libs for packages that have C extensions
+          # --onefile: everything in one .exe (voices embedded via --add-data)
+          # Voices are accessed via sys._MEIPASS at runtime (handled in piper_gui.py)
           pyinstaller \
             --name piper-tts \
             --windowed \
-            --onedir \
+            --onefile \
             --collect-all pyopenjtalk \
             --collect-all piper \
             --collect-all sounddevice \
@@ -279,69 +335,15 @@ jobs:
             --hidden-import tkinter.messagebox \
             --hidden-import tkinter.filedialog \
             --hidden-import tkinter.scrolledtext \
+            --add-data "voices;voices" \
+            --add-data "app/piper-icon.png;." \
             app/piper_gui.py
-          echo "PyInstaller done. dist/ contents:"
-          ls dist/piper-tts/ | head -20
 
-      - name: Package release zip
-        shell: bash
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          RELEASE="piper-tts-windows-${VERSION}"
+          echo "Build complete:"
+          ls -lh dist/piper-tts.exe
 
-          mkdir -p "${RELEASE}"
-          cp -r dist/piper-tts/. "${RELEASE}/"
-
-          # Copy icon if present
-          cp app/piper-icon.png "${RELEASE}/" 2>/dev/null || true
-
-          # Bundled voices go alongside the exe
-          mkdir -p "${RELEASE}/voices"
-          cp voices/*.onnx voices/*.onnx.json "${RELEASE}/voices/"
-
-          # Launcher batch file
-          cat > "${RELEASE}/piper-tts.bat" <<'BAT'
-          @echo off
-          cd /d "%~dp0"
-          start "" "%~dp0piper-tts.exe"
-          BAT
-
-          # README
-          cat > "${RELEASE}/README.txt" <<'README'
-          Piper TTS - EN/JA Edition
-          ==========================
-
-          QUICK START
-          -----------
-          Double-click  piper-tts.exe  (or piper-tts.bat)
-
-          BUNDLED VOICES (fully offline)
-          --------------------------------
-          - English  : en_US-lessac-medium
-          - Japanese : ja_JP-hi_fi_captain-medium
-
-          KEYBOARD SHORTCUTS
-          ------------------
-          Ctrl+Enter        Start speaking
-          Ctrl+Shift+Enter  Speak from marked position
-          Ctrl+Space        Pause / Resume
-          Escape            Stop
-          Ctrl+T            Toggle dark/light theme
-          Ctrl+E            Export as WAV
-          Ctrl+M / Ctrl+J   Mark / Jump to mark
-          Ctrl++ / Ctrl+-   Font size up / down
-
-          SOURCE
-          ------
-          https://github.com/DeerajS2004/piper-tts-desktop
-          README
-
-          # Zip
-          7z a "${RELEASE}.zip" "${RELEASE}/"
-          ls -lh "${RELEASE}.zip"
-
-      - name: Upload .zip to release
+      - name: Upload single .exe to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: "piper-tts-windows-*.zip"
+          files: dist/piper-tts.exe

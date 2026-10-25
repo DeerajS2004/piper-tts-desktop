@@ -89,22 +89,25 @@ class PiperTTSApp:
     def set_window_icon(self):
         """Set custom window icon if available"""
         try:
+            # In PyInstaller --onefile bundles, resources live in sys._MEIPASS
+            meipass = getattr(sys, '_MEIPASS', None)
             icon_locations = [
-                os.path.join(os.path.dirname(__file__), "piper-icon.png"),
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "piper-icon.png"),
-                os.path.expanduser("~/.local/share/piper-tts/app/piper-icon.png"),
-                "/usr/share/pixmaps/piper-tts.png",
-                "piper-icon.png"
+                os.path.join(meipass, 'piper-icon.png') if meipass else None,
+                os.path.join(os.path.dirname(__file__), 'piper-icon.png'),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'piper-icon.png'),
+                os.path.expanduser('~/.local/share/piper-tts/app/piper-icon.png'),
+                '/usr/share/pixmaps/piper-tts.png',
+                'piper-icon.png',
             ]
             for icon_path in icon_locations:
-                if os.path.exists(icon_path):
+                if icon_path and os.path.exists(icon_path):
                     icon_img = tk.PhotoImage(file=icon_path)
                     self.icon_img = icon_img
                     self.root.iconphoto(True, icon_img)
-                    print(f"Icon loaded: {icon_path}")
+                    print(f'Icon loaded: {icon_path}')
                     break
         except Exception as e:
-            print(f"Icon error: {e}")
+            print(f'Icon error: {e}')
     
     def setup_styles(self):
         """Configure modern ttk styles with theme support"""
@@ -408,25 +411,34 @@ class PiperTTSApp:
             self.text_scroll_x.grid()
     
     def scan_installed_voices(self):
-        """Scan for installed voice files and build language-aware display names"""
-        # Support multiple voice locations (Linux venv, Windows bundle, etc.)
-        candidate_dirs = [
-            os.path.expanduser('~/.local/share/piper-tts/voices'),        # Linux install
+        """Scan for installed voice files and build language-aware display names."""
+        # Build candidate list — first match wins
+        meipass = getattr(sys, '_MEIPASS', None)   # PyInstaller --onefile
+        appdir  = os.environ.get('APPDIR', '')      # AppImage
+        env_dir = os.environ.get('PIPER_VOICES_DIR', '')  # explicit override
+
+        candidate_dirs = list(filter(None, [
+            env_dir,                                                          # explicit override
+            os.path.join(meipass, 'voices') if meipass else None,            # PyInstaller onefile
+            os.path.join(appdir, 'voices') if appdir else None,              # AppImage
+            os.path.expanduser('~/.local/share/piper-tts/voices'),           # Linux user install
             os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         '..', 'voices'),                                   # portable / PyInstaller
-            os.path.join(os.path.dirname(sys.executable), 'voices'),       # Windows exe dir
+                         '..', 'voices'),                                    # portable / next to app
+            os.path.join(os.path.dirname(sys.executable), 'voices'),         # Windows exe dir
             os.path.join(os.environ.get('APPDATA', ''), 'piper-tts',
-                         'voices'),                                         # Windows AppData
-        ]
+                         'voices'),                                          # Windows AppData
+        ]))
+
+        self.voices = {}
+        self.voice_files = {}
+
         voices_dir = None
         for d in candidate_dirs:
             d = os.path.normpath(d)
             if os.path.isdir(d):
                 voices_dir = d
+                print(f'Voices directory: {voices_dir}')
                 break
-
-        self.voices = {}
-        self.voice_files = {}
 
         if not voices_dir:
             print('No voices directory found')
