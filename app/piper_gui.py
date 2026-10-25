@@ -4,9 +4,11 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 import subprocess
 import threading
 import os
+import sys
 import time
 import signal
 import json
+import platform as _platform
 
 class PiperTTSApp:
     def __init__(self, root):
@@ -53,20 +55,36 @@ class PiperTTSApp:
         self.piper_bin = self._find_piper()
     
     def _find_piper(self):
-        """Find the piper binary: check venv first, then PATH."""
-        # Common venv location from install.sh
-        venv_piper = os.path.expanduser("~/.local/share/piper-tts/venv/bin/piper")
-        if os.path.isfile(venv_piper) and os.access(venv_piper, os.X_OK):
-            print(f"piper found: {venv_piper}")
-            return venv_piper
-        # Fallback: check PATH
+        """Find the piper binary or fall back to Python module."""
         import shutil
-        path_piper = shutil.which("piper")
+
+        if _platform.system() == 'Windows':
+            # In a PyInstaller bundle we use the piper Python API directly
+            # (no external subprocess needed on Windows)
+            try:
+                import piper  # noqa: F401 - just check importability
+                return None   # None = use API path
+            except ImportError:
+                pass
+            # Fall back to piper.exe in Scripts/ next to this file
+            scripts_piper = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), 'piper.exe')
+            if os.path.isfile(scripts_piper):
+                return scripts_piper
+            return shutil.which('piper') or 'piper'
+
+        # Linux / macOS --------------------------------------------------
+        venv_piper = os.path.expanduser(
+            '~/.local/share/piper-tts/venv/bin/piper')
+        if os.path.isfile(venv_piper) and os.access(venv_piper, os.X_OK):
+            print(f'piper found: {venv_piper}')
+            return venv_piper
+        path_piper = shutil.which('piper')
         if path_piper:
-            print(f"piper found in PATH: {path_piper}")
+            print(f'piper found in PATH: {path_piper}')
             return path_piper
-        print("WARNING: piper binary not found! Speech will fail.")
-        return "piper"  # will fail with clear error at runtime
+        print('WARNING: piper binary not found!')
+        return 'piper'
     
     def set_window_icon(self):
         """Set custom window icon if available"""
@@ -391,13 +409,27 @@ class PiperTTSApp:
     
     def scan_installed_voices(self):
         """Scan for installed voice files and build language-aware display names"""
-        voices_dir = os.path.expanduser("~/.local/share/piper-tts/voices")
-        
+        # Support multiple voice locations (Linux venv, Windows bundle, etc.)
+        candidate_dirs = [
+            os.path.expanduser('~/.local/share/piper-tts/voices'),        # Linux install
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'voices'),                                   # portable / PyInstaller
+            os.path.join(os.path.dirname(sys.executable), 'voices'),       # Windows exe dir
+            os.path.join(os.environ.get('APPDATA', ''), 'piper-tts',
+                         'voices'),                                         # Windows AppData
+        ]
+        voices_dir = None
+        for d in candidate_dirs:
+            d = os.path.normpath(d)
+            if os.path.isdir(d):
+                voices_dir = d
+                break
+
         self.voices = {}
         self.voice_files = {}
-        
-        if not os.path.exists(voices_dir):
-            print("ℹ️ Voices directory not found")
+
+        if not voices_dir:
+            print('No voices directory found')
             return
         
         # Language display name mapping
@@ -938,8 +970,59 @@ Ctrl+0            - Reset font size""")
         except Exception:
             return 22050  # Default Piper sample rate
     
+    # ------------------------------------------------------------------
+    # Windows audio: use piper Python API + sounddevice
+    # ------------------------------------------------------------------
+    def _run_piper_windows(self, text, voice_info):
+        """Synthesise and play using the piper Python API (no subprocess).
+        This runs inside the playback thread."""
+        try:
+            from piper import PiperVoice  # bundled by PyInstaller
+            import sounddevice as sd
+
+            speed   = self.speed_var.get()
+            voice   = PiperVoice.load(voice_info['onnx'])
+            sr      = voice.config.sample_rate
+            # length_scale: >1 = slower, <1 = faster
+            length  = round(1.0 / speed, 3) if speed != 1.0 else 1.0
+
+            CHUNK = 4096
+            with sd.RawOutputStream(samplerate=sr, channels=1,
+                                    dtype='int16', blocksize=CHUNK) as stream:
+                self._sd_stream = stream
+                for audio_bytes in voice.synthesize_stream_raw(
+                        text, length_scale=length):
+                    if not self.is_playing:
+                        break
+                    # Pause: block until resumed
+                    while self.is_paused and self.is_playing:
+                        time.sleep(0.05)
+                    stream.write(audio_bytes)
+        except ImportError as e:
+            self.root.after(0, lambda: messagebox.showerror(
+                'Missing dependency',
+                f'Could not import required module:\n{e}\n\n'
+                'Install with: pip install piper-tts sounddevice'))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror('Error',
+                                                             str(e)))
+        finally:
+            self._sd_stream = None
+            self.cleanup_processes()
+            self.root.after(0, self.reset_ui)
+
+    # ------------------------------------------------------------------
+    # Core piper runner (Linux: subprocess + aplay)
+    # ------------------------------------------------------------------
     def run_piper(self, text, voice_info):
-        """Run piper with process control"""
+        """Run piper with process control.
+        On Windows, delegates to _run_piper_windows() (piper API + sounddevice).
+        On Linux, uses subprocess piper binary piped to aplay.
+        """
+        if _platform.system() == 'Windows' or self.piper_bin is None:
+            self._run_piper_windows(text, voice_info)
+            return
+
         try:
             speed = self.speed_var.get()
             sample_rate = self._get_voice_sample_rate(voice_info)
