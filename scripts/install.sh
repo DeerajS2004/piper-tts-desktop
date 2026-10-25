@@ -1,473 +1,184 @@
 #!/bin/bash
-# Piper TTS Desktop - Installation Script
-# Version: 1.0.0
-# Author: [Your Name]
+# Piper TTS Desktop — Install Script
+# Installs English + Japanese voices and sets up a local venv.
+# Usage: ./scripts/install.sh
 
-set -e  # Exit on error
-set -u  # Treat unset variables as error
+set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ---- colours ---------------------------------------------------------------
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; NC='\033[0m'
+info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()      { echo -e "${GREEN}[ OK ]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+die()     { echo -e "${RED}[ERR ]${NC} $*" >&2; exit 1; }
 
-# Configuration
-APP_NAME="Piper TTS"
-APP_VERSION="1.0.0"
+# ---- paths -----------------------------------------------------------------
 INSTALL_DIR="$HOME/.local/share/piper-tts"
-DESKTOP_FILE="$HOME/.local/share/applications/piper-tts.desktop"
-ICON_NAME="audio-card"
-
-# Voice configurations
-VOICE_NAME="en_US-lessac-medium"
-VOICE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US-lessac-medium.onnx"
-VOICE_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US-lessac-medium.onnx.json"
-
-# Functions for colored output
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo ""
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}   $APP_NAME Installer v$APP_VERSION${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo ""
-}
-
-# Check if running as root
-check_root() {
-    if [ "$EUID" -eq 0 ]; then 
-        print_warning "It's not recommended to run this script as root."
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
-}
-
-# Check system requirements
-check_requirements() {
-    print_info "Checking system requirements..."
-    
-    # Check Python
-    if command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
-        print_success "Python $PYTHON_VERSION found"
-    else
-        print_error "Python3 not found. Please install Python 3.8+"
-        exit 1
-    fi
-    
-    # Check pip
-    if command -v pip3 &> /dev/null; then
-        print_success "pip3 found"
-    else
-        print_error "pip3 not found. Installing..."
-        sudo apt update && sudo apt install -y python3-pip
-    fi
-    
-    # Check ALSA
-    if command -v aplay &> /dev/null; then
-        print_success "ALSA (aplay) found"
-    else
-        print_error "ALSA not found. Installing alsa-utils..."
-        sudo apt update && sudo apt install -y alsa-utils
-    fi
-    
-    # Check wget/curl for downloading
-    if command -v wget &> /dev/null; then
-        DOWNLOADER="wget -q --show-progress"
-    elif command -v curl &> /dev/null; then
-        DOWNLOADER="curl -L --progress-bar -O"
-    else
-        print_error "Neither wget nor curl found. Installing wget..."
-        sudo apt update && sudo apt install -y wget
-        DOWNLOADER="wget -q --show-progress"
-    fi
-    
-    # Check for tkinter (GUI dependency)
-    if python3 -c "import tkinter" &> /dev/null; then
-        print_success "tkinter found"
-    else
-        print_error "tkinter not found. Installing..."
-        sudo apt update && sudo apt install -y python3-tk
-    fi
-}
-
-# Create directory structure
-create_directories() {
-    print_info "Creating directory structure..."
-    
-    # Main installation directory
-    mkdir -p "$INSTALL_DIR/app"
-    mkdir -p "$INSTALL_DIR/voices"
-    mkdir -p "$INSTALL_DIR/logs"
-    mkdir -p "$HOME/.local/share/applications"
-    mkdir -p "$HOME/.local/bin"
-    
-    print_success "Directories created"
-}
-
-# Install Python dependencies
-install_dependencies() {
-    print_info "Installing Python dependencies..."
-    
-    # Check if virtual environment exists
-    if [ ! -d "$INSTALL_DIR/venv" ]; then
-        print_info "Creating Python virtual environment..."
-        python3 -m venv "$INSTALL_DIR/venv"
-        print_success "Virtual environment created"
-    fi
-    
-    # Activate virtual environment
-    source "$INSTALL_DIR/venv/bin/activate"
-    
-    # Upgrade pip first
-    pip install --upgrade pip
-    
-    # Install piper-tts >= 1.8.0 (required for Japanese phoneme_type support)
-    print_info "Installing piper-tts..."
-    pip install "piper-tts>=1.8.0"
-    
-    # Install pyopenjtalk for Japanese TTS support
-    print_info "Installing Japanese phonemizer (pyopenjtalk)..."
-    pip install pyopenjtalk
-    
-    # Other required packages
-    pip install packaging
-    
-    deactivate
-    
-    print_success "Python dependencies installed"
-}
-
-# Copy application files
-copy_application() {
-    print_info "Copying application files..."
-    
-    # Get the directory where this script is located
-    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-    
-    # Check if we're running from the right location
-    if [ ! -f "$PROJECT_DIR/app/piper_gui.py" ]; then
-        print_error "Cannot find application files!"
-        print_error "Please run this script from the project directory."
-        exit 1
-    fi
-    
-    # Copy Python files
-    cp "$PROJECT_DIR/app/piper_gui.py" "$INSTALL_DIR/app/"
-    cp "$PROJECT_DIR/app/test_app.py" "$INSTALL_DIR/app/"
-    
-    # Make launcher script
-    cat > "$INSTALL_DIR/app/launcher.sh" << 'EOF'
-#!/bin/bash
-# Piper TTS Desktop Launcher
-
-# Get the directory of this script
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-INSTALL_DIR="$(dirname "$SCRIPT_DIR")"
-
-# Activate virtual environment
-if [ -f "$INSTALL_DIR/venv/bin/activate" ]; then
-    source "$INSTALL_DIR/venv/bin/activate"
-else
-    echo "ERROR: Virtual environment not found at $INSTALL_DIR/venv"
-    exit 1
-fi
-
-# Set voice directory
 VOICES_DIR="$INSTALL_DIR/voices"
-if [ ! -d "$VOICES_DIR" ]; then
-    echo "ERROR: Voices directory not found at $VOICES_DIR"
-    exit 1
+VENV="$INSTALL_DIR/venv"
+APP_DST="$INSTALL_DIR/app"
+LAUNCHER="$HOME/.local/bin/piper-tts"
+DESKTOP="$HOME/.local/share/applications/piper-tts.desktop"
+
+# ---- voice URLs (huggingface main branch — always up to date) ---------------
+EN_NAME="en_US-lessac-medium"
+EN_ONNX_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+EN_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"
+
+JA_NAME="ja_JP-hi_fi_captain-medium"
+JA_ONNX_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx"
+JA_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx.json"
+
+# ---- helper: download with wget or curl ------------------------------------
+download() {   # download <url> <dest>
+    local url="$1" dest="$2"
+    if command -v wget &>/dev/null; then
+        wget -q --show-progress -O "$dest" "$url"
+    elif command -v curl &>/dev/null; then
+        curl -L --progress-bar -o "$dest" "$url"
+    else
+        die "Neither wget nor curl found — install one and retry."
+    fi
+}
+
+# ============================================================================
+echo ""
+echo -e "${BLUE}============================================${NC}"
+echo -e "${GREEN}   Piper TTS Desktop — Installer           ${NC}"
+echo -e "${BLUE}============================================${NC}"
+echo ""
+
+# ---- locate project root ---------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+[[ -f "$PROJECT_DIR/app/piper_gui.py" ]] || \
+    die "Cannot find app/piper_gui.py — run this script from the repo root."
+
+# ---- system packages -------------------------------------------------------
+info "Checking system packages…"
+MISSING_PKGS=()
+command -v python3          &>/dev/null || MISSING_PKGS+=(python3)
+python3 -m venv --help      &>/dev/null || MISSING_PKGS+=(python3-venv)
+python3 -c "import tkinter" &>/dev/null || MISSING_PKGS+=(python3-tk)
+command -v aplay            &>/dev/null || MISSING_PKGS+=(alsa-utils)
+command -v espeak-ng        &>/dev/null || MISSING_PKGS+=(espeak-ng)
+
+if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+    info "Installing: ${MISSING_PKGS[*]}"
+    sudo apt-get update -qq
+    sudo apt-get install -y "${MISSING_PKGS[@]}"
+fi
+ok "System packages OK"
+
+# ---- create directories ----------------------------------------------------
+info "Creating directories…"
+mkdir -p "$VOICES_DIR" "$APP_DST" "$HOME/.local/bin" \
+         "$HOME/.local/share/applications"
+ok "Directories created"
+
+# ---- Python virtual environment --------------------------------------------
+info "Setting up Python venv at $VENV …"
+if [[ ! -d "$VENV" ]]; then
+    python3 -m venv "$VENV"
 fi
 
-# Run the application
-cd "$SCRIPT_DIR"
-python3 piper_gui.py --voices-dir="$VOICES_DIR" "$@"
+info "Upgrading pip / setuptools / wheel…"
+"$VENV/bin/pip" install --upgrade pip setuptools wheel -q
 
-# Deactivate virtual environment
-deactivate
+info "Installing piper-tts (English + Japanese support)…"
+"$VENV/bin/pip" install "piper-tts>=1.8.0" -q
+
+info "Installing pyopenjtalk (Japanese phonemizer)…"
+"$VENV/bin/pip" install pyopenjtalk -q
+
+ok "Python packages installed"
+
+# Quick smoke-test
+"$VENV/bin/python3" -c "import piper; print('  piper OK')"
+"$VENV/bin/python3" -c "import pyopenjtalk; print('  pyopenjtalk OK')"
+
+# ---- copy app files --------------------------------------------------------
+info "Copying application files…"
+cp "$PROJECT_DIR/app/piper_gui.py" "$APP_DST/"
+[[ -f "$PROJECT_DIR/app/piper-icon.png" ]] && \
+    cp "$PROJECT_DIR/app/piper-icon.png" "$APP_DST/"
+ok "App files copied"
+
+# ---- launcher script -------------------------------------------------------
+info "Creating launcher…"
+cat > "$LAUNCHER" <<EOF
+#!/bin/bash
+exec "$VENV/bin/python3" "$APP_DST/piper_gui.py" "\$@"
 EOF
-    
-    chmod +x "$INSTALL_DIR/app/launcher.sh"
-    
-    # Create a symlink in ~/.local/bin for command line access
-    ln -sf "$INSTALL_DIR/app/launcher.sh" "$HOME/.local/bin/piper-tts"
-    
-    print_success "Application files copied"
-}
+chmod +x "$LAUNCHER"
+ok "Launcher: $LAUNCHER"
 
-# Download voice files
-download_voices() {
-    print_info "Checking voice files..."
-    
-    VOICE_ONNX="$INSTALL_DIR/voices/$VOICE_NAME.onnx"
-    VOICE_JSON="$INSTALL_DIR/voices/$VOICE_NAME.onnx.json"
-    
-    # Check if voice files already exist
-    if [ -f "$VOICE_ONNX" ] && [ -f "$VOICE_JSON" ]; then
-        print_success "Voice files already exist"
-        return 0
-    fi
-    
-    print_info "Downloading voice files (this may take a few minutes)..."
-    
-    # Download ONNX file
-    print_info "Downloading $VOICE_NAME.onnx..."
-    if ! wget -q --show-progress -O "$VOICE_ONNX" "$VOICE_URL"; then
-        print_error "Failed to download voice file"
-        print_info "Trying with curl..."
-        if ! curl -L --progress-bar -o "$VOICE_ONNX" "$VOICE_URL"; then
-            print_error "Cannot download voice file. Please check your internet connection."
-            print_info "You can manually download voices from:"
-            print_info "https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en"
-            return 1
-        fi
-    fi
-    
-    # Download JSON file
-    print_info "Downloading $VOICE_NAME.onnx.json..."
-    if ! wget -q --show-progress -O "$VOICE_JSON" "$VOICE_JSON_URL"; then
-        print_error "Failed to download JSON file"
-        print_info "Trying with curl..."
-        curl -L --progress-bar -o "$VOICE_JSON" "$VOICE_JSON_URL"
-    fi
-    
-    # Verify downloads
-    if [ -f "$VOICE_ONNX" ] && [ -f "$VOICE_JSON" ]; then
-        ONNX_SIZE=$(du -h "$VOICE_ONNX" | cut -f1)
-        print_success "Voice files downloaded successfully ($ONNX_SIZE)"
-    else
-        print_error "Failed to download voice files"
-        return 1
-    fi
-    
-    # Optional: Download Japanese voice
-    echo ""
-    read -p "$(echo -e "${YELLOW}Would you like to also download the Japanese voice (\U1F1EF\U1F1F5 ja_JP-kenjirous-medium, ~63 MB)? [y/N] ${NC}")" -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        JA_NAME="ja_JP-kenjirous-medium"
-        JA_ONNX="$INSTALL_DIR/voices/$JA_NAME.onnx"
-        JA_JSON="$INSTALL_DIR/voices/$JA_NAME.onnx.json"
-        JA_ONNX_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kenjirous/medium/ja_JP-kenjirous-medium.onnx"
-        JA_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kenjirous/medium/ja_JP-kenjirous-medium.onnx.json"
-        
-        if [ -f "$JA_ONNX" ] && [ -f "$JA_JSON" ]; then
-            print_success "Japanese voice already exists"
-        else
-            print_info "Downloading Japanese voice (ja_JP-kenjirous-medium)..."
-            if wget -q --show-progress -O "$JA_ONNX" "$JA_ONNX_URL" && \
-               wget -q --show-progress -O "$JA_JSON" "$JA_JSON_URL"; then
-                JA_SIZE=$(du -h "$JA_ONNX" | cut -f1)
-                print_success "Japanese voice downloaded ($JA_SIZE)"
-            else
-                print_warning "Failed to download Japanese voice. You can add it later with: ./scripts/add_japanese_voice.sh"
-                # Clean up partial files
-                rm -f "$JA_ONNX" "$JA_JSON"
-            fi
-        fi
-    else
-        print_info "Skipping Japanese voice. Add it later with: ./scripts/add_japanese_voice.sh"
-    fi
-    
-    return 0
-}
-
-# Create desktop entry
-create_desktop_entry() {
-    print_info "Creating desktop entry..."
-    
-    cat > "$DESKTOP_FILE" << EOF
+# ---- desktop entry ---------------------------------------------------------
+info "Creating desktop entry…"
+cat > "$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Piper TTS
-Comment=Offline Text-to-Speech Application
 GenericName=Text-to-Speech
-Keywords=TTS;Text-to-Speech;Speech;Audio;
-Categories=AudioVideo;Audio;Utility;
-Exec=$INSTALL_DIR/app/launcher.sh
-Icon=$ICON_NAME
+Comment=Offline TTS for English and Japanese
+Exec=$LAUNCHER
+Icon=$APP_DST/piper-icon.png
 Terminal=false
+Categories=AudioVideo;Audio;Utility;Accessibility;
+Keywords=TTS;speech;offline;japanese;english;
 StartupNotify=true
-MimeType=text/plain;
-Version=$APP_VERSION
 EOF
-    
-    # Update desktop database
-    if command -v update-desktop-database &> /dev/null; then
-        update-desktop-database "$HOME/.local/share/applications"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+ok "Desktop entry created"
+
+# ---- voice download --------------------------------------------------------
+download_voice() {   # download_voice <name> <onnx_url> <json_url>
+    local name="$1" onnx_url="$2" json_url="$3"
+    local onnx="$VOICES_DIR/$name.onnx"
+    local jsn="$VOICES_DIR/$name.onnx.json"
+    if [[ -f "$onnx" && -f "$jsn" ]]; then
+        ok "Voice already present: $name"
+        return
     fi
-    
-    print_success "Desktop entry created"
+    info "Downloading $name …"
+    download "$onnx_url" "$onnx"
+    download "$json_url" "$jsn"
+    local sz; sz=$(du -h "$onnx" | cut -f1)
+    ok "Voice downloaded: $name ($sz)"
 }
 
-# Create uninstall script
-create_uninstaller() {
-    print_info "Creating uninstall script..."
-    
-    cat > "$INSTALL_DIR/uninstall.sh" << 'EOF'
-#!/bin/bash
-# Piper TTS Desktop - Uninstaller
+download_voice "$EN_NAME" "$EN_ONNX_URL" "$EN_JSON_URL"
+download_voice "$JA_NAME" "$JA_ONNX_URL" "$JA_JSON_URL"
 
-set -e
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-echo "Uninstalling Piper TTS Desktop..."
-echo "================================="
-
-# Remove desktop entry
-if [ -f "$HOME/.local/share/applications/piper-tts.desktop" ]; then
-    rm "$HOME/.local/share/applications/piper-tts.desktop"
-    echo "✓ Removed desktop entry"
-fi
-
-# Remove symlink
-if [ -L "$HOME/.local/bin/piper-tts" ]; then
-    rm "$HOME/.local/bin/piper-tts"
-    echo "✓ Removed command line symlink"
-fi
-
-# Ask about removing voice files
-read -p "Remove voice files (~120MB)? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    if [ -d "$HOME/.local/share/piper-tts" ]; then
-        rm -rf "$HOME/.local/share/piper-tts"
-        echo "✓ Removed all files"
-    fi
+# ---- quick TTS smoke-test --------------------------------------------------
+info "Testing English TTS…"
+if echo "hello" | "$VENV/bin/piper" \
+    --model "$VOICES_DIR/$EN_NAME.onnx" \
+    --output_file /tmp/piper_test_en.wav 2>&1; then
+    ok "English TTS: OK"
 else
-    echo "Voice files kept at $HOME/.local/share/piper-tts/voices/"
+    warn "English TTS self-test failed — check output above"
 fi
 
-# Update desktop database
-if command -v update-desktop-database &> /dev/null; then
-    update-desktop-database "$HOME/.local/share/applications"
+info "Testing Japanese TTS…"
+if echo "konnichiwa" | "$VENV/bin/piper" \
+    --model "$VOICES_DIR/$JA_NAME.onnx" \
+    --output_file /tmp/piper_test_ja.wav 2>&1; then
+    ok "Japanese TTS: OK"
+else
+    warn "Japanese TTS self-test failed — check output above"
 fi
 
+# ---- done ------------------------------------------------------------------
 echo ""
-echo -e "${GREEN}Uninstallation complete!${NC}"
-EOF
-    
-    chmod +x "$INSTALL_DIR/uninstall.sh"
-    
-    print_success "Uninstall script created"
-}
-
-# Run post-install tests
-post_install_tests() {
-    print_info "Running post-installation tests..."
-    
-    # Test 1: Check if launcher script works
-    if [ -x "$INSTALL_DIR/app/launcher.sh" ]; then
-        print_success "Launcher script is executable"
-    else
-        print_error "Launcher script is not executable"
-    fi
-    
-    # Test 2: Check if voice files exist
-    if [ -f "$INSTALL_DIR/voices/$VOICE_NAME.onnx" ]; then
-        VOICE_SIZE=$(du -h "$INSTALL_DIR/voices/$VOICE_NAME.onnx" | cut -f1)
-        print_success "Voice file found ($VOICE_SIZE)"
-    else
-        print_warning "Voice file not found. You'll need to download it manually."
-    fi
-    
-    # Test 3: Check virtual environment
-    if [ -f "$INSTALL_DIR/venv/bin/activate" ]; then
-        print_success "Virtual environment setup complete"
-    else
-        print_error "Virtual environment not found"
-    fi
-    
-    print_success "Post-installation tests completed"
-}
-
-# Show completion message
-show_completion() {
-    echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}    INSTALLATION COMPLETE!              ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo ""
-    echo -e "${BLUE}🎤 Piper TTS Desktop is now installed!${NC}"
-    echo ""
-    echo -e "${YELLOW}📌 Installation Details:${NC}"
-    echo "  Application:     $INSTALL_DIR/app/"
-    echo "  Voices:          $INSTALL_DIR/voices/"
-    echo "  Virtual Env:     $INSTALL_DIR/venv/"
-    echo "  Desktop Entry:   $DESKTOP_FILE"
-    echo ""
-    echo -e "${YELLOW}🚀 How to launch:${NC}"
-    echo "  1. Search for 'Piper TTS' in your Applications menu"
-    echo "  2. Or run from terminal: $HOME/.local/bin/piper-tts"
-    echo "  3. Or run directly: $INSTALL_DIR/app/launcher.sh"
-    echo ""
-    echo -e "${YELLOW}🔧 To uninstall:${NC}"
-    echo "  Run: $INSTALL_DIR/uninstall.sh"
-    echo ""
-    echo -e "${YELLOW}🐛 Need help?${NC}"
-    echo "  Run the test script: python3 $INSTALL_DIR/app/test_app.py"
-    echo ""
-}
-
-# Main installation process
-main() {
-    print_header
-    
-    # Check if not running as root
-    check_root
-    
-    # Check requirements
-    check_requirements
-    
-    # Create directories
-    create_directories
-    
-    # Install dependencies
-    install_dependencies
-    
-    # Copy application
-    copy_application
-    
-    # Download voices
-    download_voices
-    
-    # Create desktop entry
-    create_desktop_entry
-    
-    # Create uninstaller
-    create_uninstaller
-    
-    # Run tests
-    post_install_tests
-    
-    # Show completion message
-    show_completion
-}
-
-# Run main function
-main
+echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}   Installation complete!                  ${NC}"
+echo -e "${GREEN}============================================${NC}"
+echo ""
+echo "  Launch: piper-tts"
+echo "  Or via app menu: search 'Piper TTS'"
+echo ""
+echo "  Voices installed:"
+ls -lh "$VOICES_DIR"/*.onnx 2>/dev/null | awk '{print "    " $5, $9}'
+echo ""
