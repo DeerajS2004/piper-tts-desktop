@@ -74,15 +74,29 @@ class PiperTTSApp:
             return shutil.which('piper') or 'piper'
 
         # Linux / macOS --------------------------------------------------
-        venv_piper = os.path.expanduser(
-            '~/.local/share/piper-tts/venv/bin/piper')
-        if os.path.isfile(venv_piper) and os.access(venv_piper, os.X_OK):
-            print(f'piper found: {venv_piper}')
-            return venv_piper
+        # 1. Same venv as the Python running this script (covers .deb at
+        #    /usr/share/piper-tts/venv AND user-local installs automatically)
+        same_venv = os.path.join(os.path.dirname(sys.executable), 'piper')
+        if os.path.isfile(same_venv) and os.access(same_venv, os.X_OK):
+            print(f'piper found (same venv): {same_venv}')
+            return same_venv
+
+        # 2. Explicit known locations
+        known = [
+            os.path.expanduser('~/.local/share/piper-tts/venv/bin/piper'),
+            '/usr/share/piper-tts/venv/bin/piper',
+        ]
+        for p in known:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                print(f'piper found: {p}')
+                return p
+
+        # 3. PATH
         path_piper = shutil.which('piper')
         if path_piper:
             print(f'piper found in PATH: {path_piper}')
             return path_piper
+
         print('WARNING: piper binary not found!')
         return 'piper'
     
