@@ -173,11 +173,11 @@ jobs:
           case "$1" in
             configure)
               VENV="/usr/share/piper-tts/venv"
-              echo "Setting up Python environment (requires internet, ~1 min)..."
+              echo "Setting up Python environment (requires internet, ~2 min)..."
               [ -d "$VENV" ] || python3 -m venv "$VENV"
-              "$VENV/bin/pip" install --upgrade pip -q
-              "$VENV/bin/pip" install "piper-tts>=1.8.0" pyopenjtalk packaging -q
-              echo "Piper TTS is ready!"
+              "$VENV/bin/pip" install --upgrade pip setuptools wheel packaging -q
+              "$VENV/bin/pip" install "piper-tts>=1.8.0" pyopenjtalk -q
+              echo "Piper TTS is ready! Launch from the app menu or run: piper-tts"
               ;;
           esac
           POSTINST

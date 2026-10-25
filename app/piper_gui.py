@@ -73,6 +73,14 @@ class PiperTTSApp:
                 return scripts_piper
             return shutil.which('piper') or 'piper'
 
+        # PyInstaller frozen bundle on Linux (AppImage) — no subprocess piper
+        if getattr(sys, 'frozen', False):
+            try:
+                import piper  # noqa: F401
+                return None   # use API path
+            except ImportError:
+                pass
+
         # Linux / macOS --------------------------------------------------
         # 1. Same venv as the Python running this script (covers .deb at
         #    /usr/share/piper-tts/venv AND user-local installs automatically)
@@ -999,18 +1007,18 @@ Ctrl+0            - Reset font size""")
     # ------------------------------------------------------------------
     # Windows audio: use piper Python API + sounddevice
     # ------------------------------------------------------------------
-    def _run_piper_windows(self, text, voice_info):
-        """Synthesise and play using the piper Python API (no subprocess).
+    def _run_piper_api(self, text, voice_info):
+        """Synthesise and play using the piper Python API + sounddevice.
+        Used on Windows and in PyInstaller bundles (AppImage / onefile exe).
         This runs inside the playback thread."""
         try:
-            from piper import PiperVoice  # bundled by PyInstaller
+            from piper import PiperVoice
             import sounddevice as sd
 
-            speed   = self.speed_var.get()
-            voice   = PiperVoice.load(voice_info['onnx'])
-            sr      = voice.config.sample_rate
-            # length_scale: >1 = slower, <1 = faster
-            length  = round(1.0 / speed, 3) if speed != 1.0 else 1.0
+            speed  = self.speed_var.get()
+            voice  = PiperVoice.load(voice_info['onnx'])
+            sr     = voice.config.sample_rate
+            length = round(1.0 / speed, 3) if speed != 1.0 else 1.0
 
             CHUNK = 4096
             with sd.RawOutputStream(samplerate=sr, channels=1,
@@ -1020,7 +1028,6 @@ Ctrl+0            - Reset font size""")
                         text, length_scale=length):
                     if not self.is_playing:
                         break
-                    # Pause: block until resumed
                     while self.is_paused and self.is_playing:
                         time.sleep(0.05)
                     stream.write(audio_bytes)
@@ -1030,8 +1037,7 @@ Ctrl+0            - Reset font size""")
                 f'Could not import required module:\n{e}\n\n'
                 'Install with: pip install piper-tts sounddevice'))
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror('Error',
-                                                             str(e)))
+            self.root.after(0, lambda: messagebox.showerror('Error', str(e)))
         finally:
             self._sd_stream = None
             self.cleanup_processes()
@@ -1046,7 +1052,7 @@ Ctrl+0            - Reset font size""")
         On Linux, uses subprocess piper binary piped to aplay.
         """
         if _platform.system() == 'Windows' or self.piper_bin is None:
-            self._run_piper_windows(text, voice_info)
+            self._run_piper_api(text, voice_info)
             return
 
         try:
@@ -1088,8 +1094,23 @@ Ctrl+0            - Reset font size""")
                 
                 piper_done = self.piper_process.poll() is not None
                 aplay_done = self.aplay_process.poll() is not None
-                
+
                 if piper_done and aplay_done:
+                    # Show piper's stderr if it exited with an error
+                    rc = self.piper_process.returncode
+                    if rc not in (0, -signal.SIGTERM, -signal.SIGKILL):
+                        raw_err = self.piper_process.stderr.read()
+                        err = raw_err.decode('utf-8', errors='replace').strip()
+                        if err:
+                            last = [l for l in err.splitlines() if l.strip()]
+                            msg  = last[-1] if last else err
+                            hint = ''
+                            if 'pyopenjtalk' in err or 'japanese' in err.lower():
+                                hint = ('\n\nJapanese requires pyopenjtalk.\n'
+                                        'Run: sudo /usr/share/piper-tts/venv/'
+                                        'bin/pip install pyopenjtalk')
+                            self.root.after(0, lambda m=msg+hint:
+                                messagebox.showerror('Speech Error', m))
                     break
                 
                 time.sleep(0.1)
