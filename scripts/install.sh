@@ -92,6 +92,9 @@ info "Installing piper-tts (English + Japanese support)…"
 info "Installing pyopenjtalk (Japanese phonemizer)…"
 "$VENV/bin/pip" install pyopenjtalk -q
 
+info "Installing Flask (web UI backend)…"
+"$VENV/bin/pip" install flask -q
+
 ok "Python packages installed"
 
 # Quick smoke-test
@@ -100,7 +103,9 @@ ok "Python packages installed"
 
 # ---- copy app files --------------------------------------------------------
 info "Copying application files…"
-cp "$PROJECT_DIR/app/piper_gui.py" "$APP_DST/"
+cp "$PROJECT_DIR/app/piper_gui.py" "$APP_DST/" 2>/dev/null || true
+cp "$PROJECT_DIR/app/server.py"   "$APP_DST/"
+cp "$PROJECT_DIR/app/index.html"  "$APP_DST/"
 [[ -f "$PROJECT_DIR/app/piper-icon.png" ]] && \
     cp "$PROJECT_DIR/app/piper-icon.png" "$APP_DST/"
 ok "App files copied"
@@ -109,7 +114,9 @@ ok "App files copied"
 info "Creating launcher…"
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
-exec "$VENV/bin/python3" "$APP_DST/piper_gui.py" "\$@"
+# Piper TTS — web UI launcher
+export PIPER_VOICES_DIR="$VOICES_DIR"
+exec "$VENV/bin/python3" "$APP_DST/server.py"
 EOF
 chmod +x "$LAUNCHER"
 ok "Launcher: $LAUNCHER"
